@@ -1,57 +1,41 @@
 package com.sparklead.screencam.ui.activities
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
-import android.media.MediaRecorder
-import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.util.DisplayMetrics
+import android.provider.MediaStore
 import android.util.Log
-import android.util.SparseIntArray
-import android.view.Surface
+import android.view.View
 import android.widget.Toast
-import android.widget.VideoView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.hbisoft.hbrecorder.HBRecorder
+import com.hbisoft.hbrecorder.HBRecorderListener
 import com.sparklead.screencam.R
 import com.sparklead.screencam.databinding.ActivityRecorderBinding
 import com.sparklead.screencam.utils.Constants
 import java.io.File
-import java.io.IOException
+import java.sql.Date
+import java.text.SimpleDateFormat
+import java.util.*
 
 
-class RecorderActivity : AppCompatActivity() {
+class RecorderActivity : AppCompatActivity(), View.OnClickListener, HBRecorderListener {
 
     private lateinit var binding: ActivityRecorderBinding
-    private var mediaProjection: MediaProjection? = null
-    private lateinit var mediaProjectionManager: MediaProjectionManager
-    private var virtualDisplay: VirtualDisplay? = null
-    private lateinit var mediaProjectCallBack: MediaProjectCallBack
+    private var hasPermission = false
+    private var hbRecorder: HBRecorder? = null
+    private var highDefinition = true
+    private var audioRecord = false
 
-    private var mScreenDensity: Int? = null
-    private var DISPLAY_WIDTH = 720
-    private var DISPLAY_HEIGTH = 1280
-
-    private var mediaRecorder: MediaRecorder? = null
-
-    private lateinit var videoView: VideoView
-    private var enable = false
-    private var mUrl: String = ""
-    private val ORIENTATIONS = SparseIntArray()
-
-    init {
-        ORIENTATIONS.append(Surface.ROTATION_0, 90)
-        ORIENTATIONS.append(Surface.ROTATION_90, 0)
-        ORIENTATIONS.append(Surface.ROTATION_180, 270)
-        ORIENTATIONS.append(Surface.ROTATION_270, 180)
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,206 +43,146 @@ class RecorderActivity : AppCompatActivity() {
         // Implemented data binding
         binding = ActivityRecorderBinding.inflate(layoutInflater)
 
-        val metrics = DisplayMetrics()
-        windowManager.defaultDisplay.getMetrics(metrics)
-        mScreenDensity = metrics.densityDpi
-        mediaRecorder = MediaRecorder()
-        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        //Initialized hbrRecorder
+        hbRecorder = HBRecorder(this, this)
 
-        binding.ivRecord.setOnClickListener {
-            if (ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE
-                ) + ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.RECORD_AUDIO
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                enable = false
-                ActivityCompat.requestPermissions(
-                    this,
-                    arrayOf(
-                        Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                        Manifest.permission.RECORD_AUDIO
-                    ), Constants.REQUEST_PERMISSION
-                )
-            } else {
-                startRecording()
-            }
-        }
-
+        //Implemented onClickListener
+        binding.ivRecord.setOnClickListener(this)
+        binding.ivPause.setOnClickListener(this)
 
         setContentView(binding.root)
 
         binding.lifecycleOwner = this
     }
 
-//    override fun onClick(v: View?) {
-//        if (v != null) {
-//            when (v.id) {
-//                (R.id.iv_record) -> {
-//                    if (ContextCompat.checkSelfPermission(
-//                            this,
-//                            Manifest.permission.WRITE_EXTERNAL_STORAGE
-//                        ) + ContextCompat.checkSelfPermission(
-//                            this,
-//                            Manifest.permission.RECORD_AUDIO
-//                        ) != PackageManager.PERMISSION_GRANTED
-//                    ) {
-//                        enable = false
-//                        ActivityCompat.requestPermissions(
-//                            this,
-//                            arrayOf(
-//                                Manifest.permission.WRITE_EXTERNAL_STORAGE,
-//                                Manifest.permission.RECORD_AUDIO
-//                            ),Constants.REQUEST_CODE
-//                        )
-//                    }
-//                    else{
-//                        startRecording()
-//                    }
-//                }
-//            }
-//        }
-//    }
+    override fun onClick(v: View?) {
+        if (v != null) {
+            when (v.id) {
+                //Permission for Audio and write external storage
+                (R.id.iv_record) -> {
+                    if (ContextCompat.checkSelfPermission(
+                            this, Manifest.permission.WRITE_EXTERNAL_STORAGE
+                        ) + ContextCompat.checkSelfPermission(
+                            this, Manifest.permission.RECORD_AUDIO
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        hasPermission = false
+                        ActivityCompat.requestPermissions(
+                            this,
+                            arrayOf(
+                                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                                Manifest.permission.RECORD_AUDIO
+                            ), Constants.PERMISSION_REQ_ID_RECORD_AUDIO
+                        )
+                    } else {
+                        //After permission granted starting recording
+                        startRecording()
+                    }
+                }
+                (R.id.iv_pause) -> {
+                    hbRecorder!!.stopScreenRecording()
+                }
+            }
+        }
+    }
+
+    private fun getBasicOptions() {
+        //switch for disable/enable
+        binding.swEnableDisable.isChecked = highDefinition
+        binding.swEnableDisable.setOnCheckedChangeListener { _, isChecked ->
+            highDefinition = isChecked
+        }
+        //switch for disable/enable audio
+        binding.swEnableDisableAudio.isChecked = audioRecord
+        binding.swEnableDisableAudio.setOnCheckedChangeListener { _, isChecked ->
+            audioRecord = isChecked
+        }
+    }
 
     private fun startRecording() {
-        if (!enable) {
-            setupRecorder()
-            recordingStart()
-            binding.ivRecord.setImageResource(R.drawable.stop)
-            enable = true
-        }
-        else{
-            try {
-                mediaRecorder!!.stop()
-                mediaRecorder!!.reset()
-                stopRecording()
-            } catch (e: java.lang.Exception) {
-                e.printStackTrace()
+        if (hasPermission) {
+            if (hbRecorder!!.isBusyRecording) {
+                hbRecorder!!.stopScreenRecording()
             }
-            binding.ivRecord.setImageResource(R.drawable.rec)
-            enable = false
+        } else {
+            startRecordingScreen()
         }
     }
 
-    private fun setupRecorder() {
-        try {
-            val fileName = ("ScreenCam${System.currentTimeMillis()}.mp4")
-            mediaRecorder!!.setAudioSource(MediaRecorder.AudioSource.MIC)
-            mediaRecorder!!.setVideoSource(MediaRecorder.VideoSource.SURFACE)
-            mediaRecorder!!.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-
-            setupFileLocation(fileName)
-        }
-        catch (e: java.lang.Exception){
-            e.printStackTrace()
-        }
-
+    private fun startRecordingScreen() {
+        //Implemented basic property for recorder
+        getBasicOptions()
+        quickSettings()
+        //Implemented media projection manager to capture the contents of a device display
+        val mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val permissionIntent = mediaProjectionManager.createScreenCaptureIntent()
+        startActivityForResult(permissionIntent, Constants.SCREEN_RECORD_REQUEST_CODE)
     }
 
-    private fun setupFileLocation(fileName: String) {
 
+    private fun quickSettings() {
+        // Basic property for video and audio
+        hbRecorder!!.setAudioBitrate(128000)
+        hbRecorder!!.setAudioSamplingRate(44100)
+        hbRecorder!!.recordHDVideo(highDefinition)
+        hbRecorder!!.isAudioEnabled(audioRecord)
+        //Customise Notification for app
+        hbRecorder!!.setNotificationSmallIcon(R.drawable.screencam)
+        hbRecorder!!.setNotificationTitle("ScreenCam")
+        hbRecorder!!.setNotificationDescription("ScreenCam is Recording")
+    }
+
+
+    private fun createFolder() {
+        //Saved recorded to Download folder with ScreenCam folder
         val path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val folder = File(path, "ScreenCam")
 
-        val folder = File(path, "ScreenCam/")
+        //if there is no such folder then create new folder
         if (!folder.exists()) {
             folder.mkdirs()
         }
-        val file = File(folder, fileName)
-        mUrl = file.absolutePath
-
-        mediaRecorder!!.setOutputFile(mUrl)
-        mediaRecorder!!.setVideoSize(DISPLAY_WIDTH, DISPLAY_HEIGTH)
-        mediaRecorder!!.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-        mediaRecorder!!.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
-        mediaRecorder!!.setVideoFrameRate(30)
-        mediaRecorder!!.setVideoEncodingBitRate(512 * 1000)
-
-        val rotation = windowManager.defaultDisplay.rotation
-        val orientation = ORIENTATIONS.get(rotation + 90)
-
-        mediaRecorder!!.setOrientationHint(orientation)
-//        mediaRecorder!!.prepare()
-//        mediaRecorder.start()
-
-        try {
-            mediaRecorder!!.prepare()
-//            mediaRecorder!!.start()
-//            mStartRecording = true
-        } catch (e: IOException) {
-            Log.e("dataNew", "Error when preparing or starting recorder", e)
-        }
     }
 
-    fun stopRecording() {
-        if (virtualDisplay == null)
-            return
-        virtualDisplay!!.release()
-        destroyProjection()
-    }
 
-    private fun destroyProjection() {
-        if (mediaProjection != null) {
-            mediaProjection!!.unregisterCallback(mediaProjectCallBack)
-            mediaProjection!!.stop()
-            mediaProjection = null
-        }
-    }
-
-    private fun createVirtualDisplay(): VirtualDisplay? {
-        return mediaProjection?.createVirtualDisplay(
-            "RecorderActivity", DISPLAY_WIDTH, DISPLAY_HEIGTH,
-            mScreenDensity!!, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            mediaRecorder!!.surface, null, null
-        )
-    }
-
+    @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != Constants.REQUEST_CODE) {
-            Toast.makeText(this, "Error", Toast.LENGTH_LONG).show()
-            return
-        }
-        if (resultCode != RESULT_OK) {
-            Toast.makeText(this, "Permission denied ", Toast.LENGTH_LONG).show()
-            enable = false
-            return
-        }
-        mediaProjectCallBack = MediaProjectCallBack(mediaRecorder!!, mediaProjection, enable)
-//        val intent = Intent(this, BackgroundService::class.java)
-//        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-//            startForegroundService(intent)
-//        } else {
-//            startService(intent)
-//        }
+        if (requestCode == Constants.SCREEN_RECORD_REQUEST_CODE) {
+            if (resultCode == RESULT_OK) {
+                //Set file path or Uri
+                setOutputPath()
 
-//        val mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        val permissionIntent = mediaProjectionManager.createScreenCaptureIntent()
-        startActivityForResult(permissionIntent!!, 777)
-        mediaProjection = mediaProjectionManager.getMediaProjection(resultCode,data!!)
-        mediaProjection!!.registerCallback(mediaProjectCallBack, null)
-        virtualDisplay = createVirtualDisplay()
-        try {
-            mediaRecorder!!.start()
-        } catch (e: java.lang.Exception) {
-            e.printStackTrace()
+                //Start screen recording
+                hbRecorder!!.startScreenRecording(data, resultCode)
+            }
         }
-
     }
 
-    private fun recordingStart() {
-        if (mediaProjection == null) {
-            startActivityForResult(
-                mediaProjectionManager.createScreenCaptureIntent(),
-                Constants.REQUEST_CODE
+    private fun setOutputPath() {
+        // Set system default time
+        val formatter = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss", Locale.getDefault())
+        val curDate = Date(System.currentTimeMillis())
+        val fileName = formatter.format(curDate).replace(" ", "")
+
+        //Set Video title and type
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = contentResolver
+            val contentValues = ContentValues()
+            contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, "ScreenCam")
+            contentValues.put(MediaStore.MediaColumns.TITLE, fileName)
+            contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+            contentValues.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+            val mUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+            //File name should be same
+            hbRecorder!!.fileName = fileName
+            hbRecorder!!.setOutputUri(mUri)
+        } else {
+            //Created folder
+            createFolder()
+            hbRecorder!!.setOutputPath(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    .toString() + "/ScreenCam"
             )
-        }
-        virtualDisplay = createVirtualDisplay()
-        try {
-            mediaRecorder!!.start()
-        } catch (e: java.lang.Exception) {
-            e.printStackTrace()
         }
     }
 
@@ -269,39 +193,46 @@ class RecorderActivity : AppCompatActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         when (requestCode) {
-            Constants.REQUEST_PERMISSION -> {
+            Constants.PERMISSION_REQ_ID_RECORD_AUDIO + Constants.PERMISSION_REQ_ID_WRITE_EXTERNAL_STORAGE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] + grantResults[1] == PackageManager.PERMISSION_GRANTED) {
                     startRecording()
                 } else {
-                    enable = false
+                    hasPermission = false
                     ActivityCompat.requestPermissions(
                         this,
                         arrayOf(
                             Manifest.permission.WRITE_EXTERNAL_STORAGE,
                             Manifest.permission.RECORD_AUDIO
-                        ),
-                        Constants.REQUEST_PERMISSION
+                        ), Constants.PERMISSION_REQ_ID_WRITE_EXTERNAL_STORAGE
                     )
                 }
             }
         }
     }
 
-    inner class MediaProjectCallBack(
-        private var mediaRecord: MediaRecorder,
-        private var mediaProjection: MediaProjection?,
-        private var enable: Boolean
-    ) : MediaProjection.Callback() {
-
-        override fun onStop() {
-            if (enable) {
-                enable = false
-                mediaRecord.stop()
-                mediaRecord.reset()
-            }
-            mediaProjection = null
-            RecorderActivity().stopRecording()
-            super.onStop()
-        }
+    override fun HBRecorderOnStart() {
+        //After screen recording start working
+        binding.ivRecord.visibility = View.GONE
+        binding.ivPause.visibility = View.VISIBLE
+        Toast.makeText(this,"Recording Starts",Toast.LENGTH_SHORT).show()
     }
+
+    override fun HBRecorderOnComplete() {
+        //After screen recording complete
+        hbRecorder!!.stopScreenRecording()
+        binding.ivPause.visibility = View.GONE
+        binding.ivRecord.visibility = View.VISIBLE
+        Toast.makeText(this,"Recording saved to your Download folder Successfully",Toast.LENGTH_LONG).show()
+    }
+
+    override fun HBRecorderOnError(errorCode: Int, reason: String?) {
+        // After any exception
+        Log.e("Error", reason.toString())
+    }
+
+    override fun onResume() {
+        super.onResume()
+        getBasicOptions()
+    }
+
 }
