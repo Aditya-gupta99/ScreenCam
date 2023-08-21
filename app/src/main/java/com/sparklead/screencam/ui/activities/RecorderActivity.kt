@@ -3,6 +3,7 @@ package com.sparklead.screencam.ui.activities
 import android.Manifest
 import android.content.ContentValues
 import android.content.Context
+import android.content.DialogInterface
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -22,6 +23,8 @@ import com.hbisoft.hbrecorder.HBRecorderListener
 import com.sparklead.screencam.R
 import com.sparklead.screencam.databinding.ActivityRecorderBinding
 import com.sparklead.screencam.utils.Constants
+import com.sparklead.screencam.utils.Constants.appSettingOpen
+import com.sparklead.screencam.utils.Constants.warningPermissionDialog
 import java.io.File
 import java.sql.Date
 import java.text.SimpleDateFormat
@@ -35,6 +38,20 @@ class RecorderActivity : AppCompatActivity(), View.OnClickListener, HBRecorderLi
     private var hbRecorder: HBRecorder? = null
     private var highDefinition = true
     private var audioRecord = false
+
+    private val multiplePermissionId = 14
+    private val multiplePermissionNameList = if (Build.VERSION.SDK_INT >= 33) {
+        arrayListOf(
+            Manifest.permission.READ_MEDIA_AUDIO,
+            Manifest.permission.READ_MEDIA_VIDEO,
+            Manifest.permission.READ_MEDIA_IMAGES
+        )
+    } else {
+        arrayListOf(
+            Manifest.permission.READ_EXTERNAL_STORAGE,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE,
+        )
+    }
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,27 +77,88 @@ class RecorderActivity : AppCompatActivity(), View.OnClickListener, HBRecorderLi
             when (v.id) {
                 //Permission for Audio and write external storage
                 (R.id.iv_record) -> {
-                    if (ContextCompat.checkSelfPermission(
-                            this, Manifest.permission.WRITE_EXTERNAL_STORAGE
-                        ) + ContextCompat.checkSelfPermission(
-                            this, Manifest.permission.RECORD_AUDIO
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        hasPermission = false
-                        ActivityCompat.requestPermissions(
-                            this,
-                            arrayOf(
-                                Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                                Manifest.permission.RECORD_AUDIO
-                            ), Constants.PERMISSION_REQ_ID_RECORD_AUDIO
-                        )
-                    } else {
-                        //After permission granted starting recording
+                    if (checkMultiplePermission()) {
                         startRecording()
                     }
                 }
                 (R.id.iv_pause) -> {
                     hbRecorder!!.stopScreenRecording()
+                }
+            }
+        }
+    }
+
+    private fun checkMultiplePermission(): Boolean {
+        val listPermissionNeeded = arrayListOf<String>()
+        for (permission in multiplePermissionNameList) {
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    permission
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                listPermissionNeeded.add(permission)
+            }
+        }
+        if (listPermissionNeeded.isNotEmpty()) {
+            ActivityCompat.requestPermissions(
+                this,
+                listPermissionNeeded.toTypedArray(),
+                multiplePermissionId
+            )
+            return false
+        }
+        return true
+    }
+
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+
+        if (requestCode == multiplePermissionId) {
+            if (grantResults.isNotEmpty()) {
+                var isGrant = true
+                for (element in grantResults) {
+                    if (element == PackageManager.PERMISSION_DENIED) {
+                        isGrant = false
+                    }
+                }
+                if (isGrant) {
+                    // here all permission granted successfully
+                    startRecording()
+                } else {
+                    var someDenied = false
+                    for (permission in permissions) {
+                        if (!ActivityCompat.shouldShowRequestPermissionRationale(
+                                this,
+                                permission
+                            )
+                        ) {
+                            if (ActivityCompat.checkSelfPermission(
+                                    this,
+                                    permission
+                                ) == PackageManager.PERMISSION_DENIED
+                            ) {
+                                someDenied = true
+                            }
+                        }
+                    }
+                    if (someDenied) {
+                        // here app Setting open because all permission is not granted
+                        // and permanent denied
+                        appSettingOpen(this)
+                    } else {
+                        // here warning permission show
+                        warningPermissionDialog(this) { _: DialogInterface, which: Int ->
+                            when (which) {
+                                DialogInterface.BUTTON_POSITIVE ->
+                                    checkMultiplePermission()
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -183,30 +261,6 @@ class RecorderActivity : AppCompatActivity(), View.OnClickListener, HBRecorderLi
             hbRecorder!!.setOutputPath(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                     .toString() + "/ScreenCam"
             )
-        }
-    }
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        when (requestCode) {
-            Constants.PERMISSION_REQ_ID_RECORD_AUDIO + Constants.PERMISSION_REQ_ID_WRITE_EXTERNAL_STORAGE -> {
-                if (grantResults.isNotEmpty() && grantResults[0] + grantResults[1] == PackageManager.PERMISSION_GRANTED) {
-                    startRecording()
-                } else {
-                    hasPermission = false
-                    ActivityCompat.requestPermissions(
-                        this,
-                        arrayOf(
-                            Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                            Manifest.permission.RECORD_AUDIO
-                        ), Constants.PERMISSION_REQ_ID_WRITE_EXTERNAL_STORAGE
-                    )
-                }
-            }
         }
     }
 
