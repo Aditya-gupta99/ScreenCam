@@ -2,11 +2,8 @@ package com.sparklead.screencam.ui.activities
 
 import android.Manifest
 import android.content.ContentValues
-import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
-import android.content.SharedPreferences
-import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
@@ -15,16 +12,13 @@ import android.provider.MediaStore
 import android.util.Log
 import android.view.View
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import com.hbisoft.hbrecorder.HBRecorder
 import com.hbisoft.hbrecorder.HBRecorderListener
 import com.sparklead.screencam.R
 import com.sparklead.screencam.databinding.ActivityRecorderBinding
 import com.sparklead.screencam.utils.Constants
-import com.sparklead.screencam.utils.Constants.appSettingOpen
-import com.sparklead.screencam.utils.Constants.warningPermissionDialog
 import java.io.File
 import java.sql.Date
 import java.text.SimpleDateFormat
@@ -38,20 +32,6 @@ class RecorderActivity : AppCompatActivity(), View.OnClickListener, HBRecorderLi
     private var hbRecorder: HBRecorder? = null
     private var highDefinition = true
     private var audioRecord = false
-
-    private val multiplePermissionId = 14
-    private val multiplePermissionNameList = if (Build.VERSION.SDK_INT >= 33) {
-        arrayListOf(
-            Manifest.permission.READ_MEDIA_AUDIO,
-            Manifest.permission.READ_MEDIA_VIDEO,
-            Manifest.permission.READ_MEDIA_IMAGES
-        )
-    } else {
-        arrayListOf(
-            Manifest.permission.READ_EXTERNAL_STORAGE,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE,
-        )
-    }
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,10 +57,9 @@ class RecorderActivity : AppCompatActivity(), View.OnClickListener, HBRecorderLi
             when (v.id) {
                 //Permission for Audio and write external storage
                 (R.id.iv_record) -> {
-                    if (checkMultiplePermission()) {
-                        startRecording()
-                    }
+                    checkAllPermission()
                 }
+
                 (R.id.iv_pause) -> {
                     hbRecorder!!.stopScreenRecording()
                 }
@@ -88,77 +67,41 @@ class RecorderActivity : AppCompatActivity(), View.OnClickListener, HBRecorderLi
         }
     }
 
-    private fun checkMultiplePermission(): Boolean {
-        val listPermissionNeeded = arrayListOf<String>()
-        for (permission in multiplePermissionNameList) {
-            if (ContextCompat.checkSelfPermission(
-                    this,
-                    permission
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                listPermissionNeeded.add(permission)
-            }
-        }
-        if (listPermissionNeeded.isNotEmpty()) {
-            ActivityCompat.requestPermissions(
-                this,
-                listPermissionNeeded.toTypedArray(),
-                multiplePermissionId
+    private fun checkAllPermission() {
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            val permissions = arrayOf(
+                Manifest.permission.READ_MEDIA_AUDIO,
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.READ_MEDIA_IMAGES
             )
-            return false
+            permissionLauncher.launch(permissions)
+        } else {
+            val permissions = arrayOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            )
+            permissionLauncher.launch(permissions)
         }
-        return true
     }
 
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray,
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        var areAllGranted = true
+        for (isGranted in result.values) {
+            areAllGranted = areAllGranted && isGranted
+        }
 
-        if (requestCode == multiplePermissionId) {
-            if (grantResults.isNotEmpty()) {
-                var isGrant = true
-                for (element in grantResults) {
-                    if (element == PackageManager.PERMISSION_DENIED) {
-                        isGrant = false
-                    }
-                }
-                if (isGrant) {
-                    // here all permission granted successfully
-                    startRecording()
-                } else {
-                    var someDenied = false
-                    for (permission in permissions) {
-                        if (!ActivityCompat.shouldShowRequestPermissionRationale(
-                                this,
-                                permission
-                            )
-                        ) {
-                            if (ActivityCompat.checkSelfPermission(
-                                    this,
-                                    permission
-                                ) == PackageManager.PERMISSION_DENIED
-                            ) {
-                                someDenied = true
-                            }
-                        }
-                    }
-                    if (someDenied) {
-                        // here app Setting open because all permission is not granted
-                        // and permanent denied
-                        appSettingOpen(this)
-                    } else {
-                        // here warning permission show
-                        warningPermissionDialog(this) { _: DialogInterface, which: Int ->
-                            when (which) {
-                                DialogInterface.BUTTON_POSITIVE ->
-                                    checkMultiplePermission()
-                            }
-                        }
-                    }
+        if (areAllGranted) {
+            startRecording()
+        } else {
+            Toast.makeText(this, "Permission denied...", Toast.LENGTH_SHORT).show()
+            Constants.warningPermissionDialog(this) { _: DialogInterface, which: Int ->
+                when (which) {
+                    DialogInterface.BUTTON_POSITIVE ->
+                        Constants.appSettingOpen(this)
                 }
             }
         }
@@ -192,7 +135,8 @@ class RecorderActivity : AppCompatActivity(), View.OnClickListener, HBRecorderLi
         getBasicOptions()
         quickSettings()
         //Implemented media projection manager to capture the contents of a device display
-        val mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val mediaProjectionManager =
+            getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val permissionIntent = mediaProjectionManager.createScreenCaptureIntent()
         startActivityForResult(permissionIntent, Constants.SCREEN_RECORD_REQUEST_CODE)
     }
@@ -258,7 +202,8 @@ class RecorderActivity : AppCompatActivity(), View.OnClickListener, HBRecorderLi
         } else {
             //Created folder
             createFolder()
-            hbRecorder!!.setOutputPath(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            hbRecorder!!.setOutputPath(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                     .toString() + "/ScreenCam"
             )
         }
@@ -268,7 +213,7 @@ class RecorderActivity : AppCompatActivity(), View.OnClickListener, HBRecorderLi
         //After screen recording start working
         binding.ivRecord.visibility = View.GONE
         binding.ivPause.visibility = View.VISIBLE
-        Toast.makeText(this,"Recording Starts",Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Recording Starts", Toast.LENGTH_SHORT).show()
     }
 
     override fun HBRecorderOnComplete() {
@@ -276,7 +221,11 @@ class RecorderActivity : AppCompatActivity(), View.OnClickListener, HBRecorderLi
         hbRecorder!!.stopScreenRecording()
         binding.ivPause.visibility = View.GONE
         binding.ivRecord.visibility = View.VISIBLE
-        Toast.makeText(this,"Recording saved to your Download folder Successfully",Toast.LENGTH_LONG).show()
+        Toast.makeText(
+            this,
+            "Recording saved to your Download folder Successfully",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     override fun HBRecorderOnError(errorCode: Int, reason: String?) {
